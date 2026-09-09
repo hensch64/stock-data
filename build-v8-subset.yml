@@ -1,0 +1,374 @@
+name: Build V8 Stooq subset
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-v8-subset.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Stooq release asset
+        run: |
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o d_us_txt.zip \
+            "https://github.com/hensch64/stock-data/releases/download/v1/d_us_txt.zip"
+          ls -lh d_us_txt.zip
+
+      - name: Extract only V8/QMM symbols
+        shell: bash
+        env:
+          REQUIRED_SYMBOLS: |
+            AAPL
+            ABBV
+            ABC
+            ABMD
+            ACGL
+            ADBE
+            ADP
+            ADS
+            ADSK
+            AET
+            AGN
+            AJG
+            ALGN
+            ALL
+            ALXN
+            AMAT
+            AMD
+            AMGN
+            AMT
+            AMZN
+            ANDV
+            ANTM
+            AON
+            APTV
+            AVGO
+            AVY
+            AWK
+            AXON
+            AYI
+            AZO
+            BA
+            BAC
+            BBBY
+            BBY
+            BF-B
+            BIIB
+            BIO
+            BKNG
+            BLDR
+            BMY
+            BR
+            BRO
+            CAG
+            CBOE
+            CCI
+            CDNS
+            CDW
+            CF
+            CHD
+            CHTR
+            CI
+            CINF
+            CLX
+            CMCSA
+            CME
+            CMG
+            CNC
+            COF
+            COO
+            COP
+            COR
+            COST
+            CPRT
+            CRM
+            CTAS
+            CTXS
+            CVS
+            CZR
+            DAL
+            DE
+            DECK
+            DELL
+            DG
+            DHI
+            DHR
+            DIS
+            DISCA
+            DLTR
+            DPZ
+            DRI
+            DVA
+            DXC
+            DXCM
+            ECL
+            EFX
+            ELV
+            EMN
+            ENPH
+            EPAM
+            EQIX
+            ETFC
+            ETN
+            ETR
+            ETSY
+            EW
+            EXC
+            EXPE
+            EXR
+            F
+            FAST
+            FCX
+            FICO
+            FISV
+            FSLR
+            FTNT
+            GD
+            GIS
+            GNRC
+            GOOG
+            GOOGL
+            GPC
+            GPN
+            GPS
+            GRMN
+            GWW
+            HAS
+            HCA
+            HD
+            HES
+            HPQ
+            HRL
+            HSY
+            HUBB
+            HUM
+            HWM
+            IDXX
+            INFO
+            INTC
+            INTU
+            IPG
+            IPGP
+            IRM
+            ISRG
+            IT
+            ITW
+            JBL
+            JKHY
+            JPM
+            KDP
+            KKR
+            KLAC
+            KMB
+            KR
+            LB
+            LDOS
+            LEN
+            LHX
+            LLY
+            LMT
+            LNC
+            LRCX
+            LSI
+            LULU
+            LUV
+            LW
+            LYV
+            M
+            MA
+            MAA
+            MAC
+            MAR
+            MAS
+            MCK
+            META
+            MKC
+            MKTX
+            MLM
+            MNST
+            MO
+            MOH
+            MOS
+            MPC
+            MRK
+            MRO
+            MS
+            MSCI
+            MSFT
+            MSI
+            MTD
+            MYL
+            NDAQ
+            NEE
+            NFLX
+            NI
+            NKE
+            NOC
+            NOW
+            NTAP
+            NUE
+            NVDA
+            NVR
+            ODFL
+            OKE
+            ON
+            ORCL
+            ORLY
+            PANW
+            PAYC
+            PCAR
+            PENN
+            PFE
+            PGR
+            PLD
+            PPG
+            PRGO
+            PSA
+            PSX
+            PWR
+            PXD
+            PYPL
+            RE
+            REGN
+            RHI
+            RMD
+            ROK
+            ROL
+            ROST
+            SBUX
+            SHW
+            SMCI
+            SNPS
+            SPGI
+            SPY
+            SRE
+            STLD
+            STX
+            STZ
+            TAP
+            TDG
+            TECH
+            TER
+            THC
+            TJX
+            TRGP
+            TSCO
+            TSLA
+            TSN
+            TT
+            TTWO
+            TWX
+            TXN
+            UAA
+            ULTA
+            UNH
+            UNP
+            URI
+            V
+            VFC
+            VLO
+            VRSK
+            VRSN
+            VRTX
+            WDC
+            WM
+            WMB
+            WRB
+            WST
+            WYNN
+            YUM
+            ZBRA
+        run: |
+          python - <<'PY'
+          import csv
+          import os
+          import pathlib
+          import zipfile
+
+          def norm_symbol(s: str) -> str:
+              return s.strip().upper().replace(".", "-")
+
+          def symbol_from_member(member: str) -> str:
+              name = pathlib.PurePosixPath(member).name.lower()
+              if not name.endswith(".txt"):
+                  return ""
+              stem = name[:-4]
+              if stem.endswith(".us"):
+                  stem = stem[:-3]
+              return norm_symbol(stem)
+
+          wanted = {
+              norm_symbol(x)
+              for x in os.environ["REQUIRED_SYMBOLS"].splitlines()
+              if x.strip()
+          }
+
+          src = pathlib.Path("d_us_txt.zip")
+          out_dir = pathlib.Path("subset")
+          out_dir.mkdir(exist_ok=True)
+
+          found = {}
+          with zipfile.ZipFile(src, "r") as zin:
+              for member in zin.namelist():
+                  sym = symbol_from_member(member)
+                  if sym in wanted:
+                      found.setdefault(sym, []).append(member)
+
+              chosen = {}
+              for sym, matches in found.items():
+                  matches = sorted(
+                      matches,
+                      key=lambda x: ("stocks" not in x.lower(), len(x), x.lower())
+                  )
+                  member = matches[0]
+                  chosen[sym] = member
+                  with zin.open(member) as r, open(out_dir / f"{sym.lower()}.us.txt", "wb") as w:
+                      while True:
+                          chunk = r.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          w.write(chunk)
+
+          with open("v8_stooq_subset_status.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              writer.writerow(["ticker", "found", "chosen_member", "all_matches"])
+              for sym in sorted(wanted):
+                  matches = found.get(sym, [])
+                  writer.writerow([
+                      sym,
+                      bool(matches),
+                      chosen.get(sym, ""),
+                      " | ".join(matches),
+                  ])
+
+          with zipfile.ZipFile(
+              "v8_stooq_subset.zip",
+              "w",
+              compression=zipfile.ZIP_DEFLATED,
+              compresslevel=6,
+          ) as zout:
+              for p in sorted(out_dir.glob("*.txt")):
+                  zout.write(p, arcname=p.name)
+              zout.write("v8_stooq_subset_status.csv")
+
+          missing = sorted(wanted - set(found))
+          print(f"Required: {len(wanted)}")
+          print(f"Found:    {len(found)}")
+          print(f"Missing:  {len(missing)}")
+          if missing:
+              print("Missing symbols:", ", ".join(missing))
+          print("Created:", pathlib.Path("v8_stooq_subset.zip").stat().st_size, "bytes")
+          PY
+
+      - name: Upload filtered subset
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-stooq-subset
+          path: |
+            v8_stooq_subset.zip
+            v8_stooq_subset_status.csv
+          retention-days: 7
+          compression-level: 0
