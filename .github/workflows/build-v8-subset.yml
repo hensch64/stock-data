@@ -1,4 +1,4 @@
-name: Build V8 Stooq subset
+name: Reconstruct QMM 2025-2026
 
 on:
   workflow_dispatch:
@@ -10,365 +10,262 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Download Stooq release asset
-        run: |
-          curl -L --fail --retry 5 --retry-delay 3 \
-            -o d_us_txt.zip \
-            "https://github.com/hensch64/stock-data/releases/download/v1/d_us_txt.zip"
-          ls -lh d_us_txt.zip
+      - name: Install dependencies
+        run: python -m pip install --quiet pandas numpy pyarrow requests
 
-      - name: Extract only V8/QMM symbols
+      - name: Reconstruct source-native QMM-v2 ranks
         shell: bash
-        env:
-          REQUIRED_SYMBOLS: |
-            AAPL
-            ABBV
-            ABC
-            ABMD
-            ACGL
-            ADBE
-            ADP
-            ADS
-            ADSK
-            AET
-            AGN
-            AJG
-            ALGN
-            ALL
-            ALXN
-            AMAT
-            AMD
-            AMGN
-            AMT
-            AMZN
-            ANDV
-            ANTM
-            AON
-            APTV
-            AVGO
-            AVY
-            AWK
-            AXON
-            AYI
-            AZO
-            BA
-            BAC
-            BBBY
-            BBY
-            BF-B
-            BIIB
-            BIO
-            BKNG
-            BLDR
-            BMY
-            BR
-            BRO
-            CAG
-            CBOE
-            CCI
-            CDNS
-            CDW
-            CF
-            CHD
-            CHTR
-            CI
-            CINF
-            CLX
-            CMCSA
-            CME
-            CMG
-            CNC
-            COF
-            COO
-            COP
-            COR
-            COST
-            CPRT
-            CRM
-            CTAS
-            CTXS
-            CVS
-            CZR
-            DAL
-            DE
-            DECK
-            DELL
-            DG
-            DHI
-            DHR
-            DIS
-            DISCA
-            DLTR
-            DPZ
-            DRI
-            DVA
-            DXC
-            DXCM
-            ECL
-            EFX
-            ELV
-            EMN
-            ENPH
-            EPAM
-            EQIX
-            ETFC
-            ETN
-            ETR
-            ETSY
-            EW
-            EXC
-            EXPE
-            EXR
-            F
-            FAST
-            FCX
-            FICO
-            FISV
-            FSLR
-            FTNT
-            GD
-            GIS
-            GNRC
-            GOOG
-            GOOGL
-            GPC
-            GPN
-            GPS
-            GRMN
-            GWW
-            HAS
-            HCA
-            HD
-            HES
-            HPQ
-            HRL
-            HSY
-            HUBB
-            HUM
-            HWM
-            IDXX
-            INFO
-            INTC
-            INTU
-            IPG
-            IPGP
-            IRM
-            ISRG
-            IT
-            ITW
-            JBL
-            JKHY
-            JPM
-            KDP
-            KKR
-            KLAC
-            KMB
-            KR
-            LB
-            LDOS
-            LEN
-            LHX
-            LLY
-            LMT
-            LNC
-            LRCX
-            LSI
-            LULU
-            LUV
-            LW
-            LYV
-            M
-            MA
-            MAA
-            MAC
-            MAR
-            MAS
-            MCK
-            META
-            MKC
-            MKTX
-            MLM
-            MNST
-            MO
-            MOH
-            MOS
-            MPC
-            MRK
-            MRO
-            MS
-            MSCI
-            MSFT
-            MSI
-            MTD
-            MYL
-            NDAQ
-            NEE
-            NFLX
-            NI
-            NKE
-            NOC
-            NOW
-            NTAP
-            NUE
-            NVDA
-            NVR
-            ODFL
-            OKE
-            ON
-            ORCL
-            ORLY
-            PANW
-            PAYC
-            PCAR
-            PENN
-            PFE
-            PGR
-            PLD
-            PPG
-            PRGO
-            PSA
-            PSX
-            PWR
-            PXD
-            PYPL
-            RE
-            REGN
-            RHI
-            RMD
-            ROK
-            ROL
-            ROST
-            SBUX
-            SHW
-            SMCI
-            SNPS
-            SPGI
-            SPY
-            SRE
-            STLD
-            STX
-            STZ
-            TAP
-            TDG
-            TECH
-            TER
-            THC
-            TJX
-            TRGP
-            TSCO
-            TSLA
-            TSN
-            TT
-            TTWO
-            TWX
-            TXN
-            UAA
-            ULTA
-            UNH
-            UNP
-            URI
-            V
-            VFC
-            VLO
-            VRSK
-            VRSN
-            VRTX
-            WDC
-            WM
-            WMB
-            WRB
-            WST
-            WYNN
-            YUM
-            ZBRA
         run: |
-          python - <<'PY'
-          import csv
-          import os
-          import pathlib
-          import zipfile
+          cat > /tmp/qmm.py <<'PY'
+          import io, json, pathlib, requests
+          import numpy as np
+          import pandas as pd
 
-          def norm_symbol(s: str) -> str:
-              return s.strip().upper().replace(".", "-")
+          REPO = "viki-m13/crt"
+          BASE = f"https://raw.githubusercontent.com/{REPO}/main"
+          API = f"https://api.github.com/repos/{REPO}/contents"
+          FEAT = "experiments/monthly_dca/cache/features"
+          PIT = "experiments/monthly_dca/cache/v2/sp500_pit"
+          MEM = f"{PIT}/sp500_membership_monthly.parquet"
+          TODAY = f"{PIT}/sp500_today.csv"
+          CHANGES = f"{PIT}/sp500_changes_since_2019.csv"
 
-          def symbol_from_member(member: str) -> str:
-              name = pathlib.PurePosixPath(member).name.lower()
-              if not name.endswith(".txt"):
-                  return ""
-              stem = name[:-4]
-              if stem.endswith(".us"):
-                  stem = stem[:-3]
-              return norm_symbol(stem)
+          EXCLUDE = {"SPY","QQQ","IWM","VTI","RSP","DIA","BTC-USD","ETH-USD",
+                     "TQQQ","SQQQ","UPRO","SPXL","SPXS","TZA","TNA","SOXL","SOXS",
+                     "FAS","FAZ","TMF","TMV","UGL","GLL","BOIL","KOLD"}
 
-          wanted = {
-              norm_symbol(x)
-              for x in os.environ["REQUIRED_SYMBOLS"].splitlines()
-              if x.strip()
+          COLS = [
+              "mom_12_1","idio_mom_12_1","mom_per_unit_vol_12",
+              "sharpe_5y","trend_health_5y","multibagger_ratio_24m",
+              "earnings_drift_proxy","ret_5d","rsi_14"
+          ]
+          W = {
+              "mom_12_1": .25, "idio_mom_12_1": .15,
+              "mom_per_unit_vol_12": .15, "sharpe_5y": .10,
+              "trend_health_5y": .10, "multibagger_ratio_24m": .05,
+              "earnings_drift_proxy": .05, "ret_5d": -.10,
+              "rsi_14": -.05,
           }
 
-          src = pathlib.Path("d_us_txt.zip")
-          out_dir = pathlib.Path("subset")
-          out_dir.mkdir(exist_ok=True)
+          # Frozen saved QMM-v2 Top-5 ledger. This is our reconstruction checksum.
+          EXPECTED_2024 = {
+            "2024-01":["AVGO","FICO","CBOE","LULU","CPRT"],
+            "2024-02":["LLY","COR","AVGO","FICO","TDG"],
+            "2024-03":["AVGO","NVDA","BLDR","LLY","FICO"],
+            "2024-04":["MPC","PCAR","DECK","META","PSX"],
+            "2024-05":["SMCI","TT","ETN","AVGO","MPC"],
+            "2024-06":["ETN","TT","DECK","TDG","SMCI"],
+            "2024-07":["SMCI","LLY","PGR","GRMN","NVDA"],
+            "2024-08":["NVDA","SMCI","HWM","IRM","DECK"],
+            "2024-09":["PGR","LLY","KKR","TRGP","IRM"],
+            "2024-10":["TT","IRM","NVDA","HWM","DVA"],
+            "2024-11":["DELL","AVGO","NVDA","IRM","TT"],
+            "2024-12":["AXON","TT","FICO","HWM","NVDA"],
+          }
 
+          sess = requests.Session()
+          sess.headers["User-Agent"] = "qmm-v2-reconstruction/1.0"
+
+          def get(url, timeout=180):
+              r = sess.get(url, timeout=timeout)
+              r.raise_for_status()
+              return r.content
+
+          out = pathlib.Path("qmm_out")
+          out.mkdir(exist_ok=True)
+
+          # Canonical point-in-time S&P membership.
+          mem = pd.read_parquet(io.BytesIO(get(f"{BASE}/{MEM}")))
+          mem["asof"] = pd.to_datetime(mem["asof"])
+          mem["ticker"] = mem["ticker"].astype(str).str.upper()
+          mem.to_csv(out/"sp500_membership_2024_2026.csv", index=False)
+
+          # Keep the public current-universe + changes files for extending beyond
+          # the last cached membership month in a fully auditable way.
+          today_bytes = get(f"{BASE}/{TODAY}")
+          changes_bytes = get(f"{BASE}/{CHANGES}")
+          (out/"sp500_today.csv").write_bytes(today_bytes)
+          (out/"sp500_changes_since_2019.csv").write_bytes(changes_bytes)
+
+          mem_dates = pd.DatetimeIndex(sorted(mem["asof"].unique()))
+          mem_date_set = set(mem_dates)
+
+          # Discover all cached source feature snapshots from 2024 onward.
+          listing = sess.get(f"{API}/{FEAT}?ref=main", timeout=60)
+          listing.raise_for_status()
+          fitems = []
+          for e in listing.json():
+              name = e.get("name","")
+              if not name.endswith(".parquet"):
+                  continue
+              try:
+                  d = pd.Timestamp(name[:-8])
+              except Exception:
+                  continue
+              if d >= pd.Timestamp("2024-01-01"):
+                  fitems.append((d, e["download_url"]))
+          fitems.sort()
+
+          rank_rows, top_rows, checks = [], [], []
+
+          for d, url in fitems:
+              # Exact date when the membership cache has that month. The final
+              # live 2026-05-07 snapshot is intentionally marked as forward-filled.
+              exact_mem = d in mem_date_set
+              if exact_mem:
+                  md = d
+              else:
+                  prev = mem_dates[mem_dates <= d]
+                  if len(prev) == 0:
+                      continue
+                  md = prev[-1]
+
+              members = set(mem.loc[mem["asof"] == md, "ticker"])
+              feat = pd.read_parquet(io.BytesIO(get(url)))
+              if "ticker" in feat.columns:
+                  feat = feat.set_index("ticker")
+              feat.index = feat.index.astype(str).str.upper()
+
+              p = feat.loc[feat.index.intersection(members)].copy()
+              p = p.loc[~p.index.isin(EXCLUDE)]
+
+              missing = [c for c in COLS if c not in p.columns]
+              if missing:
+                  raise RuntimeError(f"{d.date()}: missing QMM columns {missing}")
+
+              # Exact transform from build_pit_panel.py.
+              for c in COLS:
+                  p[c+"_xs"] = (p[c].rank(pct=True) - .5) * 2.0
+
+              p["qmm_score"] = sum(W[c] * p[c+"_xs"] for c in COLS)
+              p = p.sort_values("qmm_score", ascending=False)
+
+              for rank, (tk, row) in enumerate(p.head(30).iterrows(), 1):
+                  x = {
+                    "asof": d.date().isoformat(),
+                    "membership_asof": pd.Timestamp(md).date().isoformat(),
+                    "membership_exact": exact_mem,
+                    "ticker": tk,
+                    "rank": rank,
+                    "qmm_score": float(row["qmm_score"]),
+                    "vol_1y": float(row["vol_1y"]) if "vol_1y" in row and pd.notna(row["vol_1y"]) else np.nan,
+                  }
+                  for c in COLS:
+                      x[c+"_xs"] = float(row[c+"_xs"]) if pd.notna(row[c+"_xs"]) else np.nan
+                  rank_rows.append(x)
+
+              top5 = list(p.head(5).index)
+              top_rows.append({
+                "asof": d.date().isoformat(),
+                "membership_asof": pd.Timestamp(md).date().isoformat(),
+                "membership_exact": exact_mem,
+                "n_members": len(members),
+                "n_scored": len(p),
+                "top5": "|".join(top5),
+              })
+
+              key = d.strftime("%Y-%m")
+              if key in EXPECTED_2024:
+                  exp = EXPECTED_2024[key]
+                  checks.append({
+                    "month": key,
+                    "expected": "|".join(exp),
+                    "reconstructed": "|".join(top5),
+                    "exact_top5_match": top5 == exp,
+                    "overlap_n": len(set(exp) & set(top5)),
+                  })
+
+          ranks = pd.DataFrame(rank_rows)
+          tops = pd.DataFrame(top_rows)
+          val = pd.DataFrame(checks)
+          ranks.to_csv(out/"qmm_v2_top30_source_native.csv", index=False)
+          tops.to_csv(out/"qmm_v2_top5_source_native.csv", index=False)
+          val.to_csv(out/"qmm_v2_validation_2024.csv", index=False)
+
+          # Union of all PIT names 2024+ plus current S&P names: enough Stooq
+          # histories to recompute QMM with the exact formula through current YTD.
+          current = pd.read_csv(io.BytesIO(today_bytes))
+          current_sym = set(current["Symbol"].astype(str).str.upper())
+          recent_mem = set(mem.loc[mem["asof"] >= pd.Timestamp("2024-01-01"), "ticker"])
+          needed = sorted((current_sym | recent_mem | {"SPY"}) - EXCLUDE)
+          pd.Series(needed, name="ticker").to_csv(out/"stooq_required_current_pit.csv", index=False)
+
+          summary = {
+            "latest_source_feature": tops["asof"].max() if len(tops) else None,
+            "latest_exact_membership": str(mem_dates.max().date()),
+            "source_feature_snapshots_2024plus": len(tops),
+            "validation_exact_top5_months": int(val["exact_top5_match"].sum()) if len(val) else 0,
+            "validation_months": int(len(val)),
+            "validation_mean_top5_overlap": float(val["overlap_n"].mean()) if len(val) else None,
+            "stooq_symbols_requested": len(needed),
+          }
+          (out/"summary.json").write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          print("\nSOURCE-NATIVE QMM TOP5, 2025+")
+          print(tops[tops["asof"] >= "2025-01-01"].to_string(index=False))
+          PY
+          python /tmp/qmm.py
+
+      - name: Extract Stooq histories for full current/PIT universe
+        shell: bash
+        run: |
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o /tmp/d_us_txt.zip \
+            "https://github.com/hensch64/stock-data/releases/download/v1/d_us_txt.zip"
+
+          python - <<'PY'
+          import pathlib, zipfile
+          import pandas as pd
+
+          wanted_raw = pd.read_csv("qmm_out/stooq_required_current_pit.csv")["ticker"].astype(str)
+          def norm(s):
+              return s.strip().upper().replace(".", "-")
+          wanted = {norm(x): x.upper() for x in wanted_raw}
+          price_dir = pathlib.Path("qmm_out/stooq_prices")
+          price_dir.mkdir(exist_ok=True)
           found = {}
-          with zipfile.ZipFile(src, "r") as zin:
-              for member in zin.namelist():
-                  sym = symbol_from_member(member)
-                  if sym in wanted:
-                      found.setdefault(sym, []).append(member)
 
-              chosen = {}
-              for sym, matches in found.items():
-                  matches = sorted(
-                      matches,
-                      key=lambda x: ("stocks" not in x.lower(), len(x), x.lower())
-                  )
-                  member = matches[0]
-                  chosen[sym] = member
-                  with zin.open(member) as r, open(out_dir / f"{sym.lower()}.us.txt", "wb") as w:
+          with zipfile.ZipFile("/tmp/d_us_txt.zip") as z:
+              for info in z.infolist():
+                  if info.is_dir():
+                      continue
+                  base = pathlib.PurePosixPath(info.filename).name.lower()
+                  if not base.endswith(".txt"):
+                      continue
+                  stem = base[:-4]
+                  if stem.endswith(".us"):
+                      stem = stem[:-3]
+                  ns = norm(stem)
+                  if ns not in wanted or ns in found:
+                      continue
+                  tk = wanted[ns]
+                  target = price_dir / f"{norm(tk)}.txt"
+                  with z.open(info) as src, open(target, "wb") as dst:
                       while True:
-                          chunk = r.read(1024 * 1024)
+                          chunk = src.read(1024*1024)
                           if not chunk:
                               break
-                          w.write(chunk)
+                          dst.write(chunk)
+                  found[ns] = info.filename
 
-          with open("v8_stooq_subset_status.csv", "w", newline="", encoding="utf-8") as f:
-              writer = csv.writer(f)
-              writer.writerow(["ticker", "found", "chosen_member", "all_matches"])
-              for sym in sorted(wanted):
-                  matches = found.get(sym, [])
-                  writer.writerow([
-                      sym,
-                      bool(matches),
-                      chosen.get(sym, ""),
-                      " | ".join(matches),
-                  ])
-
-          with zipfile.ZipFile(
-              "v8_stooq_subset.zip",
-              "w",
-              compression=zipfile.ZIP_DEFLATED,
-              compresslevel=6,
-          ) as zout:
-              for p in sorted(out_dir.glob("*.txt")):
-                  zout.write(p, arcname=p.name)
-              zout.write("v8_stooq_subset_status.csv")
-
-          missing = sorted(wanted - set(found))
-          print(f"Required: {len(wanted)}")
-          print(f"Found:    {len(found)}")
-          print(f"Missing:  {len(missing)}")
-          if missing:
-              print("Missing symbols:", ", ".join(missing))
-          print("Created:", pathlib.Path("v8_stooq_subset.zip").stat().st_size, "bytes")
+          status = pd.DataFrame([
+              {
+                "ticker": tk,
+                "normalized": norm(tk),
+                "found": norm(tk) in found,
+                "source_member": found.get(norm(tk), ""),
+              }
+              for tk in sorted(wanted_raw)
+          ])
+          status.to_csv("qmm_out/stooq_current_pit_status.csv", index=False)
+          print(f"Stooq histories found: {status['found'].sum()}/{len(status)}")
+          print("Missing:", ", ".join(status.loc[~status["found"],"ticker"].tolist()))
           PY
 
-      - name: Upload filtered subset
+      - name: Upload reconstruction data
         uses: actions/upload-artifact@v4
         with:
-          name: v8-stooq-subset
-          path: |
-            v8_stooq_subset.zip
-            v8_stooq_subset_status.csv
+          name: qmm-v2-exact-reconstruction
+          path: qmm_out
           retention-days: 7
-          compression-level: 0
+          compression-level: 6
